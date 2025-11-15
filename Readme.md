@@ -3,6 +3,13 @@
 [rust_dnfdaemon](https://github.com/timlau/rust_dnf5daemon)
 
 ## How to run
+Checkout the rust_dnf5daemon repository in the same base directory as minidnf.
+
+```
+<basedir>/minidnf
+<basedir>/rust_dnfdaemon
+```
+
 The module contains a simple binary there give an output like `dnf list <pattern>`
 
 ### Examples (using cargo run)

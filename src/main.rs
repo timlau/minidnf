@@ -30,6 +30,7 @@ struct Args {
     #[arg(long, short)]
     debug: bool,
 }
+
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
 #[clap(rename_all = "lowercase")]
 enum Scope {
@@ -38,11 +39,13 @@ enum Scope {
     Available,
 }
 
-fn get_scope(scope: Scope) -> String {
-    match scope {
-        Scope::All => "all".to_owned(),
-        Scope::Available => "available".to_owned(),
-        Scope::Installed => "installed".to_owned(),
+impl Scope {
+    fn to_string(&self) -> String {
+        match self {
+            Scope::All => "all".to_owned(),
+            Scope::Available => "available".to_owned(),
+            Scope::Installed => "installed".to_owned(),
+        }
     }
 }
 
@@ -80,8 +83,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         info!("Starting");
         let dnf_daemon = DnfDaemon::new().await;
         dnf_daemon.base.read_all_repos().await.ok();
-        let scope = get_scope(args.scope);
-        let packages = get_packages(&dnf_daemon, &args.patterns, &scope).await;
+        let packages = get_packages(&dnf_daemon, args.patterns, &args.scope.to_string()).await;
         print_packages(&packages, args.scope);
         info!("Ending");
     }

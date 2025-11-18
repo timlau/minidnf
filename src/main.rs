@@ -81,14 +81,22 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
     setup_logger(&args);
     debug!("{:?}", args);
-    if args.patterns.len() > 0 {
+    if !args.patterns.is_empty() {
         if let Ok(dnf_daemon) = DnfDaemon::new().await {
             let mut download_add_new = dnf_daemon.base.receive_download_add_new().await?;
+            let mut download_progress = dnf_daemon.base.receive_download_progress().await?;
             futures_util::try_join!(
                 async {
                     while let Some(signal) = download_add_new.next().await {
                         let args = signal.args()?;
                         println!("Signal: download_add_new : {:?}", args);
+                    }
+                    Ok::<(), zbus::Error>(())
+                },
+                async {
+                    while let Some(signal) = download_progress.next().await {
+                        let args = signal.args()?;
+                        println!("Signal: download_progress : {:?}", args);
                     }
                     Ok::<(), zbus::Error>(())
                 },
@@ -103,7 +111,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     let rc = dnf_daemon.base.reset().await;
                     println!("{:?}", rc);
                     dnf_daemon.base.read_all_repos().await.ok();
-                    Ok(())
+                    println!("\nWaiting for signals, use Ctrl-C to Quit");
+                    Ok::<(), zbus::Error>(())
                 }
             )?;
         } else {

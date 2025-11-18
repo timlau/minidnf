@@ -7,8 +7,10 @@ use dnf5daemon::{daemon::DnfDaemon, package::DnfPackage};
 // use env_logger;
 use futures_util::{self, StreamExt};
 use log::debug;
-use std::collections::HashMap;
 use std::error::Error;
+use std::hash::Hash;
+use std::{collections::HashMap, result};
+use zbus::zvariant::OwnedValue;
 
 use clap::{Parser, ValueEnum};
 use env_logger::Env;
@@ -72,6 +74,24 @@ async fn download_progress_signal(dnf_daemon: &DnfDaemon) -> Result<(), zbus::Er
     Ok::<(), zbus::Error>(())
 }
 
+fn show_transaction(
+    txmbrs: &Vec<(
+        String,
+        String,
+        String,
+        HashMap<String, OwnedValue>,
+        HashMap<String, OwnedValue>,
+    )>,
+) {
+    //fn show_transaction(txmbrs: &Vec<_>) {
+    for (_, action, _, _, tx_pkg) in txmbrs {
+        // dbg!(&tx_pkg);
+        let reason = String::try_from(tx_pkg.get("reason").unwrap().to_owned()).unwrap();
+        let full_nevra = String::try_from(tx_pkg.get("full_nevra").unwrap().to_owned()).unwrap();
+        println!(" {} {} for {} ", action, full_nevra, reason);
+    }
+}
+
 async fn download_add_new_signal(dnf_daemon: &DnfDaemon) -> Result<(), zbus::Error> {
     let mut download_add_new = dnf_daemon.base.receive_download_add_new().await?;
     while let Some(signal) = download_add_new.next().await {
@@ -86,8 +106,10 @@ async fn do_install(dnf_daemon: &DnfDaemon, pkgs: &Vec<String>) {
     println!(" --> Installing packages {:?}", pkgs);
     dnf_daemon.rpm.install(pkgs, options.clone()).await.ok();
     if let Ok(rc) = dnf_daemon.goal.resolve(options.clone()).await {
-        println!("resolve : {:?}", rc);
-        let (_txmbrs, result) = rc;
+        //println!("resolve : {:?}", rc);
+        let txmbrs = rc.0;
+        let result = rc.1;
+        show_transaction(&txmbrs);
         if result == 0 {
             // everything is Ok, do transaction
             let rc = dnf_daemon.goal.do_transaction(options.clone()).await.ok();
@@ -103,16 +125,9 @@ async fn do_remove(dnf_daemon: &DnfDaemon, pkgs: &Vec<String>) {
     println!(" --> Removing packages : {:?}", &pkgs);
     dnf_daemon.rpm.remove(pkgs, options.clone()).await.ok();
     if let Ok(rc) = dnf_daemon.goal.resolve(options.clone()).await {
-        let (txmbrs, result) = rc;
-        for (_, action, _, _, tx_pkgs) in txmbrs {
-            println!("Action : {action}");
-
-            for (key, value) in tx_pkgs {
-                if key == "full_nevra" {
-                    println!("{:?}", value);
-                }
-            }
-        }
+        let txmbrs = rc.0;
+        let result = rc.1;
+        show_transaction(&txmbrs);
         if result == 0 {
             // everything is Ok, do transaction
             let rc = dnf_daemon.goal.do_transaction(options.clone()).await.ok();
@@ -133,8 +148,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     if !args.patterns.is_empty() {
         if let Ok(dnf_daemon) = DnfDaemon::new().await {
             futures_util::try_join!(
+                // listen for signals
                 async { download_add_new_signal(&dnf_daemon).await },
                 async { download_progress_signal(&dnf_daemon).await },
+                // main actions
                 async {
                     dnf_daemon.base.read_all_repos().await.ok();
                     // std::process::exit(0);

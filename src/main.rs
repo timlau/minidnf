@@ -80,10 +80,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
     setup_logger(&args);
     debug!("{:?}", args);
     if args.patterns.len() > 0 {
-        let dnf_daemon = DnfDaemon::new().await;
-        dnf_daemon.base.read_all_repos().await.ok();
-        let packages = get_packages(&dnf_daemon, args.patterns, &args.scope.to_string()).await;
-        print_packages(&packages, args.scope);
+        if let Ok(dnf_daemon) = DnfDaemon::new().await {
+            dnf_daemon.base.read_all_repos().await.ok();
+            if let Ok(packages) =
+                get_packages(&dnf_daemon, args.patterns, &args.scope.to_string()).await
+            {
+                print_packages(&packages, args.scope);
+            };
+        };
     }
     Ok(())
 }

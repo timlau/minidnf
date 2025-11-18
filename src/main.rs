@@ -5,7 +5,9 @@
 
 use dnf5daemon::package::get_packages;
 use dnf5daemon::{daemon::DnfDaemon, package::DnfPackage};
+use zbus;
 // use env_logger;
+use futures_util::{self, StreamExt};
 use log::debug;
 use std::error::Error;
 
@@ -80,10 +82,33 @@ async fn main() -> Result<(), Box<dyn Error>> {
     setup_logger(&args);
     debug!("{:?}", args);
     if args.patterns.len() > 0 {
-        let dnf_daemon = DnfDaemon::new().await;
-        dnf_daemon.base.read_all_repos().await.ok();
-        let packages = get_packages(&dnf_daemon, args.patterns, &args.scope.to_string()).await;
-        print_packages(&packages, args.scope);
+        if let Ok(dnf_daemon) = DnfDaemon::new().await {
+            let mut download_add_new = dnf_daemon.base.receive_download_add_new().await?;
+            futures_util::try_join!(
+                async {
+                    while let Some(signal) = download_add_new.next().await {
+                        let args = signal.args()?;
+                        println!("Signal: download_add_new : {:?}", args);
+                    }
+                    Ok::<(), zbus::Error>(())
+                },
+                async {
+                    dnf_daemon.base.read_all_repos().await.ok();
+                    let packages =
+                        get_packages(&dnf_daemon, args.patterns, &args.scope.to_string())
+                            .await
+                            .expect("Error in get_packages");
+                    print_packages(&packages, args.scope);
+                    // std::process::exit(0);
+                    let rc = dnf_daemon.base.reset().await;
+                    println!("{:?}", rc);
+                    dnf_daemon.base.read_all_repos().await.ok();
+                    Ok(())
+                }
+            )?;
+        } else {
+            println!("Can't make connection to dnf5daemon-server");
+        };
     }
     Ok(())
 }

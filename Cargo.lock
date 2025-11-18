@@ -314,6 +314,7 @@ version = "0.1.0"
 dependencies = [
  "env_logger",
  "futures",
+ "futures-util",
  "log",
  "serde",
  "tokio",
@@ -652,9 +653,11 @@ dependencies = [
  "clap",
  "dnf5daemon",
  "env_logger",
+ "futures-util",
  "log",
  "termion",
  "tokio",
+ "zbus",
 ]
 
 [[package]]

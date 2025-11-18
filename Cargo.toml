@@ -10,3 +10,5 @@ env_logger = "0.11.8"
 log = "0.4.28"
 termion = "4.0.5"
 tokio = { version = "1.48.0", features = ["macros"] }
+futures-util = "0.3.31"
+zbus = "5.12.0"

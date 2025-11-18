@@ -1,14 +1,13 @@
-// #![allow(unreachable_code)]
+#![allow(unused)]
 // #![allow(unused_variables)]
 // #![allow(unused_imports)]
 // #![allow(unused_mut)]
 
-use dnf5daemon::package::get_packages;
 use dnf5daemon::{daemon::DnfDaemon, package::DnfPackage};
-use zbus;
 // use env_logger;
 use futures_util::{self, StreamExt};
 use log::debug;
+use std::collections::HashMap;
 use std::error::Error;
 
 use clap::{Parser, ValueEnum};
@@ -41,23 +40,13 @@ enum Scope {
     Available,
 }
 
-impl Scope {
-    fn to_string(&self) -> String {
-        match self {
-            Scope::All => "all".to_owned(),
-            Scope::Available => "available".to_owned(),
-            Scope::Installed => "installed".to_owned(),
-        }
-    }
-}
-
 fn setup_logger(args: &Args) {
     if args.debug {
         env_logger::Builder::from_env(Env::default().default_filter_or("debug")).init();
     }
 }
 
-fn print_packages(packages: &Vec<DnfPackage>, scope: Scope) {
+fn print_packages(packages: &[DnfPackage], scope: Scope) {
     if scope == Scope::All || scope == Scope::Installed {
         println!("\nInstalled Packages:{}", color::Fg(color::LightGreen));
         for pkg in packages.iter().filter(|pkg| pkg.is_installed) {
@@ -74,6 +63,66 @@ fn print_packages(packages: &Vec<DnfPackage>, scope: Scope) {
     }
 }
 
+async fn download_progress_signal(dnf_daemon: &DnfDaemon) -> Result<(), zbus::Error> {
+    let mut download_progress = dnf_daemon.base.receive_download_progress().await?;
+    while let Some(signal) = download_progress.next().await {
+        let args = signal.args()?;
+        print!("\rSignal: download_progress : {:?}", args);
+    }
+    Ok::<(), zbus::Error>(())
+}
+
+async fn download_add_new_signal(dnf_daemon: &DnfDaemon) -> Result<(), zbus::Error> {
+    let mut download_add_new = dnf_daemon.base.receive_download_add_new().await?;
+    while let Some(signal) = download_add_new.next().await {
+        let args = signal.args()?;
+        println!("Signal: download_add_new : {:?}", args);
+    }
+    Ok::<(), zbus::Error>(())
+}
+
+async fn do_install(dnf_daemon: &DnfDaemon, pkgs: &Vec<String>) {
+    let options: std::collections::HashMap<&str, &zbus::zvariant::Value<'_>> = HashMap::new();
+    println!(" --> Installing packages {:?}", pkgs);
+    dnf_daemon.rpm.install(pkgs, options.clone()).await.ok();
+    if let Ok(rc) = dnf_daemon.goal.resolve(options.clone()).await {
+        println!("resolve : {:?}", rc);
+        let (_txmbrs, result) = rc;
+        if result == 0 {
+            // everything is Ok, do transaction
+            let rc = dnf_daemon.goal.do_transaction(options.clone()).await.ok();
+            println!("do_transaction : {:?}", rc);
+        } else {
+            println!("resolve failed with code : {}", result)
+        }
+    };
+}
+
+async fn do_remove(dnf_daemon: &DnfDaemon, pkgs: &Vec<String>) {
+    let options: std::collections::HashMap<&str, &zbus::zvariant::Value<'_>> = HashMap::new();
+    println!(" --> Removing packages : {:?}", &pkgs);
+    dnf_daemon.rpm.remove(pkgs, options.clone()).await.ok();
+    if let Ok(rc) = dnf_daemon.goal.resolve(options.clone()).await {
+        let (txmbrs, result) = rc;
+        for (_, action, _, _, tx_pkgs) in txmbrs {
+            println!("Action : {action}");
+
+            for (key, value) in tx_pkgs {
+                if key == "full_nevra" {
+                    println!("{:?}", value);
+                }
+            }
+        }
+        if result == 0 {
+            // everything is Ok, do transaction
+            let rc = dnf_daemon.goal.do_transaction(options.clone()).await.ok();
+            println!("do_transaction : {:?}", rc);
+        } else {
+            println!("resolve failed with code : {}", result)
+        }
+    };
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     // Setup logging
@@ -83,35 +132,19 @@ async fn main() -> Result<(), Box<dyn Error>> {
     debug!("{:?}", args);
     if !args.patterns.is_empty() {
         if let Ok(dnf_daemon) = DnfDaemon::new().await {
-            let mut download_add_new = dnf_daemon.base.receive_download_add_new().await?;
-            let mut download_progress = dnf_daemon.base.receive_download_progress().await?;
             futures_util::try_join!(
-                async {
-                    while let Some(signal) = download_add_new.next().await {
-                        let args = signal.args()?;
-                        println!("Signal: download_add_new : {:?}", args);
-                    }
-                    Ok::<(), zbus::Error>(())
-                },
-                async {
-                    while let Some(signal) = download_progress.next().await {
-                        let args = signal.args()?;
-                        println!("Signal: download_progress : {:?}", args);
-                    }
-                    Ok::<(), zbus::Error>(())
-                },
+                async { download_add_new_signal(&dnf_daemon).await },
+                async { download_progress_signal(&dnf_daemon).await },
                 async {
                     dnf_daemon.base.read_all_repos().await.ok();
-                    let packages =
-                        get_packages(&dnf_daemon, args.patterns, &args.scope.to_string())
-                            .await
-                            .expect("Error in get_packages");
-                    print_packages(&packages, args.scope);
                     // std::process::exit(0);
-                    let rc = dnf_daemon.base.reset().await;
-                    println!("{:?}", rc);
-                    dnf_daemon.base.read_all_repos().await.ok();
-                    println!("\nWaiting for signals, use Ctrl-C to Quit");
+                    //let pkgs = ["0ad"];
+                    let pkgs = args.patterns;
+
+                    do_install(&dnf_daemon, &pkgs).await;
+                    dnf_daemon.base.reset().await.ok();
+                    do_remove(&dnf_daemon, &pkgs).await;
+                    println!("\nMain job has completed, use Ctrl-C to Quit");
                     Ok::<(), zbus::Error>(())
                 }
             )?;

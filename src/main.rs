@@ -3,7 +3,7 @@
 // #![allow(unused_imports)]
 // #![allow(unused_mut)]
 
-use dnf5daemon::{daemon::DnfDaemon, package::DnfPackage};
+use dnf5daemon::{DnfDaemon, package::DnfPackage};
 // use env_logger;
 use futures_util::{self, StreamExt};
 use log::debug;
@@ -83,12 +83,18 @@ fn show_transaction(
         HashMap<String, OwnedValue>,
     )>,
 ) {
-    //fn show_transaction(txmbrs: &Vec<_>) {
-    for (_, action, _, _, tx_pkg) in txmbrs {
-        // dbg!(&tx_pkg);
-        let reason = String::try_from(tx_pkg.get("reason").unwrap().to_owned()).unwrap();
+    // (object_type, action, reason, {transaction_item_attributes}, {object})
+    for (_, action, reason, _, tx_pkg) in txmbrs {
+        let sub_reason = String::try_from(tx_pkg.get("reason").unwrap().to_owned()).unwrap();
         let full_nevra = String::try_from(tx_pkg.get("full_nevra").unwrap().to_owned()).unwrap();
-        println!(" {} {} for {} ", action, full_nevra, reason);
+        if sub_reason == "None" || sub_reason == *reason {
+            println!(" {} {} for {} ", action, full_nevra, reason);
+        } else {
+            println!(
+                " {} {} for {} ({}) ",
+                action, full_nevra, reason, sub_reason
+            );
+        }
     }
 }
 

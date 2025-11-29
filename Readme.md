@@ -10,25 +10,33 @@ Checkout the rust_dnf5daemon repository in the same base directory as minidnf.
 <basedir>/rust_dnfdaemon
 ```
 
-The module contains a simple binary there give an output like `dnf list <pattern>`
+The module contains a simple binary there do the same as, but using the dnf5daemon server.
+
+* `dnf list <pattern>`
+* `dnf install <pattern>`
+* `dnf remove  <pattern>`
 
 ### Examples (using cargo run)
 ```bash
-cargo run -- dnf5*
-cargo run -- dnf5* yum* --scope installed
+
+cargo run -- install 0xFFFF
+cargo run -- remove 0xFFFF
+cargo run -- list dnf5* yum* --scope installed
 ```
 
 ### Usage
 ```bash
 
-Usage: minidnf [OPTIONS] [PATTERNS]...
+Usage: minidnf [OPTIONS] [COMMAND]
 
-Arguments:
-  [PATTERNS]...  packages to search for
+Commands:
+  install  Install packages
+  remove   Remove packages
+  list     
+  help     Print this message or the help of the given subcommand(s)
 
 Options:
-  --scope <SCOPE>      Package scope [default: all] [possible values: all, installed, available]
-  -d, --debug          Enable debug logging
-  -h, --help           Print help
-  -V, --version        Print version
+  -d, --debug    packages to search for Enable debug logging
+  -h, --help     Print help
+  -V, --version  Print version
 ```

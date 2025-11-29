@@ -26,6 +26,7 @@ pub enum Commands {
         /// packages to remove
         pkgs: Vec<String>,
     },
+    /// List packages
     List {
         /// List packages
         pkgs: Vec<String>,

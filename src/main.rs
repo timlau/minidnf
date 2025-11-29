@@ -1,113 +1,24 @@
-#![allow(unused)]
+// #![allow(unused)]
 // #![allow(unused_variables)]
 // #![allow(unused_imports)]
 // #![allow(unused_mut)]
 
-use dnf5daemon::{DnfDaemon, package::DnfPackage};
-// use env_logger;
-use futures_util::{self, StreamExt};
+mod args;
+mod signals;
+mod utils;
+
+use args::{Args, Commands};
+use clap::Parser;
+use dnf5daemon::{DnfDaemon, package::get_packages};
+use futures_util::{self};
 use log::debug;
+use signals::{signal_download_add_new, signal_download_progress};
+use std::collections::HashMap;
 use std::error::Error;
-use std::hash::Hash;
-use std::{collections::HashMap, result};
-use zbus::zvariant::OwnedValue;
+use utils::print_packages;
+use utils::{setup_logger, show_transaction};
 
-use clap::{Parser, ValueEnum};
-use env_logger::Env;
-use termion::color;
-
-/// Simple program to test the dnf5 dbus app
-#[derive(Parser, Debug)]
-#[command(arg_required_else_help = true)]
-#[command(version, about, long_about = None)]
-struct Args {
-    /// packages to search for
-    // #[arg(short, long)]
-    patterns: Vec<String>,
-
-    /// Package scope
-    #[arg(long, value_enum, default_value = "all")]
-    scope: Scope,
-
-    /// Enable debug logging
-    #[arg(long, short)]
-    debug: bool,
-}
-
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
-#[clap(rename_all = "lowercase")]
-enum Scope {
-    All,
-    Installed,
-    Available,
-}
-
-fn setup_logger(args: &Args) {
-    if args.debug {
-        env_logger::Builder::from_env(Env::default().default_filter_or("debug")).init();
-    }
-}
-
-fn print_packages(packages: &[DnfPackage], scope: Scope) {
-    if scope == Scope::All || scope == Scope::Installed {
-        println!("\nInstalled Packages:{}", color::Fg(color::LightGreen));
-        for pkg in packages.iter().filter(|pkg| pkg.is_installed) {
-            let na = format!("{}.{}", pkg.name, pkg.arch);
-            println!("{0:<50} {1:<20} {2:<15}", na, pkg.evr, pkg.repo_id);
-        }
-    };
-    if scope == Scope::All || scope == Scope::Available {
-        println!("\n{}Available Packages:", color::Fg(color::Reset));
-        for pkg in packages.iter().filter(|pkg| !pkg.is_installed) {
-            let na = format!("{}.{}", pkg.name, pkg.arch);
-            println!("{0:<50} {1:<20} {2:<15}", na, pkg.evr, pkg.repo_id);
-        }
-    }
-}
-
-async fn download_progress_signal(dnf_daemon: &DnfDaemon) -> Result<(), zbus::Error> {
-    let mut download_progress = dnf_daemon.base.receive_download_progress().await?;
-    while let Some(signal) = download_progress.next().await {
-        let args = signal.args()?;
-        print!("\rSignal: download_progress : {:?}", args);
-    }
-    Ok::<(), zbus::Error>(())
-}
-
-fn show_transaction(
-    txmbrs: &Vec<(
-        String,
-        String,
-        String,
-        HashMap<String, OwnedValue>,
-        HashMap<String, OwnedValue>,
-    )>,
-) {
-    // (object_type, action, reason, {transaction_item_attributes}, {object})
-    for (_, action, reason, _, tx_pkg) in txmbrs {
-        let sub_reason = String::try_from(tx_pkg.get("reason").unwrap().to_owned()).unwrap();
-        let full_nevra = String::try_from(tx_pkg.get("full_nevra").unwrap().to_owned()).unwrap();
-        if sub_reason == "None" || sub_reason == *reason {
-            println!(" {} {} for {} ", action, full_nevra, reason);
-        } else {
-            println!(
-                " {} {} for {} ({}) ",
-                action, full_nevra, reason, sub_reason
-            );
-        }
-    }
-}
-
-async fn download_add_new_signal(dnf_daemon: &DnfDaemon) -> Result<(), zbus::Error> {
-    let mut download_add_new = dnf_daemon.base.receive_download_add_new().await?;
-    while let Some(signal) = download_add_new.next().await {
-        let args = signal.args()?;
-        println!("Signal: download_add_new : {:?}", args);
-    }
-    Ok::<(), zbus::Error>(())
-}
-
-async fn do_install(dnf_daemon: &DnfDaemon, pkgs: &Vec<String>) {
+async fn do_install(dnf_daemon: &DnfDaemon, pkgs: &Vec<String>) -> Result<(), zbus::Error> {
     let options: std::collections::HashMap<&str, &zbus::zvariant::Value<'_>> = HashMap::new();
     println!(" --> Installing packages {:?}", pkgs);
     dnf_daemon.rpm.install(pkgs, options.clone()).await.ok();
@@ -124,9 +35,10 @@ async fn do_install(dnf_daemon: &DnfDaemon, pkgs: &Vec<String>) {
             println!("resolve failed with code : {}", result)
         }
     };
+    Ok::<(), zbus::Error>(())
 }
 
-async fn do_remove(dnf_daemon: &DnfDaemon, pkgs: &Vec<String>) {
+async fn do_remove(dnf_daemon: &DnfDaemon, pkgs: &Vec<String>) -> Result<(), zbus::Error> {
     let options: std::collections::HashMap<&str, &zbus::zvariant::Value<'_>> = HashMap::new();
     println!(" --> Removing packages : {:?}", &pkgs);
     dnf_daemon.rpm.remove(pkgs, options.clone()).await.ok();
@@ -142,6 +54,30 @@ async fn do_remove(dnf_daemon: &DnfDaemon, pkgs: &Vec<String>) {
             println!("resolve failed with code : {}", result)
         }
     };
+    Ok::<(), zbus::Error>(())
+}
+
+async fn main_action(args: &Args, dnf_daemon: &DnfDaemon) -> Result<(), zbus::Error> {
+    dnf_daemon.base.read_all_repos().await.ok();
+    match &args.command {
+        Some(Commands::Install { pkgs }) => {
+            do_install(dnf_daemon, pkgs).await?;
+        }
+        Some(Commands::Remove { pkgs }) => {
+            do_remove(dnf_daemon, pkgs).await?;
+        }
+        Some(Commands::List { pkgs, scope }) => {
+            let scp = scope.to_string();
+            if let Ok(packages) = get_packages(&dnf_daemon, pkgs, &scp).await {
+                print_packages(&packages, *scope);
+            };
+        }
+        _ => {
+            println!("No command provided, use --help for more information.");
+        }
+    }
+    println!("Main action completed. Press Ctrl+C to exit.");
+    Ok::<(), zbus::Error>(())
 }
 
 #[tokio::main]
@@ -151,29 +87,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
     setup_logger(&args);
     debug!("{:?}", args);
-    if !args.patterns.is_empty() {
-        if let Ok(dnf_daemon) = DnfDaemon::new().await {
-            futures_util::try_join!(
-                // listen for signals
-                async { download_add_new_signal(&dnf_daemon).await },
-                async { download_progress_signal(&dnf_daemon).await },
-                // main actions
-                async {
-                    dnf_daemon.base.read_all_repos().await.ok();
-                    // std::process::exit(0);
-                    //let pkgs = ["0ad"];
-                    let pkgs = args.patterns;
-
-                    do_install(&dnf_daemon, &pkgs).await;
-                    dnf_daemon.base.reset().await.ok();
-                    do_remove(&dnf_daemon, &pkgs).await;
-                    println!("\nMain job has completed, use Ctrl-C to Quit");
-                    Ok::<(), zbus::Error>(())
-                }
-            )?;
-        } else {
-            println!("Can't make connection to dnf5daemon-server");
-        };
+    if let Ok(dnf_daemon) = DnfDaemon::new().await {
+        futures_util::try_join!(
+            // --  listen for signals
+            async { signal_download_add_new(&dnf_daemon).await },
+            async { signal_download_progress(&dnf_daemon).await },
+            // -- Main action
+            async { main_action(&args, &dnf_daemon).await }
+        )?;
+    } else {
+        println!("Can't make connection to dnf5daemon-server");
     }
     Ok(())
 }

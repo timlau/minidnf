@@ -1,0 +1,18 @@
+
+                    Some(Commands::List { pkgs }) => {
+                        let options: std::collections::HashMap<&str, &zbus::zvariant::Value<'_>> =
+                            HashMap::new();
+                        let packages = dnf_daemon.rpm.search(&pkgs, options.clone()).await.ok();
+                        if let Some(pkgs) = packages {
+                            utils::print_packages(&pkgs, args.scope);
+                        } else {
+                            println!("No packages found matching {:?}", &pkgs);
+                        }
+                    }
+                    _ => {
+                        println!("No command provided, use --help for more information.");
+                    }
+
+
+
+                Ok::<(), zbus::Error>(())
